@@ -100,6 +100,7 @@ MCP → Cubase で送ると操作、Cubase → MCP で返ってくるのが現�
 | 0x10 | BANK            | step (0=next,1=prev,2=shiftL,3=shiftR,4=reset) | バンク移動 (SysEx 経由) |
 | 0x11 | PING            | —                                          | 接続テスト → 全状態スナップショット (先頭が 0x6E IDENT) を応答 |
 | 0x12 | SNAPSHOT        | —                                          | 全状態の再送を要求 |
+| 0x14 | SELECTED_NAME   | —                                          | 選択トラック名を DirectAccess タイトルから取得して応答 (0x28)。ホストにより応答しない場合があり、その場合は 0x25-0x27 の DA_WALK で名称を取得できる |
 
 > LOC_FORMAT で位置文字列はスクリプトへ `[mode][len][ascii...]` で渡す (常に ASCII モード)。
 
