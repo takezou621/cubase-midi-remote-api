@@ -111,7 +111,7 @@ def cubase_set_tempo(bpm: float) -> dict:
 # ---------------------------------------------------------------- channels
 
 @mcp.tool()
-def cubase_set_channel(slot: int, param: str, value) -> dict:
+def cubase_set_channel(slot: int, param: str, value: float | bool) -> dict:
     """Set a parameter of one of the 8 visible bank slots.
     param: volume (0..1) | pan (0..1, 0.5=center) | mute | solo | record_arm | monitor | select (bool).
     Volume/pan are set with 14-bit precision via SysEx."""

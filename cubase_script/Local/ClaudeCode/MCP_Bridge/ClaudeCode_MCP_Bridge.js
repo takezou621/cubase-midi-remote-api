@@ -636,8 +636,9 @@ if (da) {
     da.mOnParameterChange = function (activeDevice, activeMapping, objectID, parameterTag) {
         var seq = gDaObjectIDToSeq[objectID]
         if (seq === undefined) return
-        var pv = 0
+        var pv = null
         try { pv = da.getParameterProcessValue(activeMapping, objectID, parameterTag) } catch (e) { }
+        if (pv === null) return // read failed: stay silent instead of sending a bogus 0
         var payload = [SX.DA_PARAM_CHANGE]
         pushU14(payload, seq)
         pushU21(payload, parameterTag)
@@ -779,12 +780,13 @@ midiInput.mOnSysex = function (activeDevice, message) {
             var tag2 = u21(data, 2)
             var obj2 = gDaSeqToObjectID[seq2]
             if (obj2 !== undefined) {
-                var pv = 0
-                try { pv = da.getParameterProcessValue(gActiveMapping, obj2, tag2) } catch (e) { }
+                var pv2 = null
+                try { pv2 = da.getParameterProcessValue(gActiveMapping, obj2, tag2) } catch (e) { }
+                if (pv2 === null) break // read failed: stay silent instead of sending a bogus 0
                 var payload2 = [SX.DA_PARAM_CHANGE]
                 pushU14(payload2, seq2)
                 pushU21(payload2, tag2)
-                pushU14(payload2, Math.round(pv * 16383))
+                pushU14(payload2, Math.round(pv2 * 16383))
                 outSysex(activeDevice, SX.DA_PARAM_CHANGE, payload2)
             }
             break

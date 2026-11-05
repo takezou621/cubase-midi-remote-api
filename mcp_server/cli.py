@@ -45,10 +45,9 @@ def cmd_monitor(args) -> int:
     print(f"Monitoring {bridge.backend} backend... Ctrl-C to stop")
     try:
         while True:
-            for item in bridge.recent(50):
+            items = bridge.drain_recent()
+            for item in items:
                 print(json.dumps(item, ensure_ascii=False))
-            with bridge._lock:
-                bridge._recent.clear()
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass

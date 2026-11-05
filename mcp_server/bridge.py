@@ -88,12 +88,10 @@ class MidiBridge:
         self._cond = threading.Condition(self._lock)
         self._recent: deque = deque(maxlen=200)
         self._ident_event = threading.Event()
-        self._da_walk_id: Optional[int] = None
-        self._da_objects: List[dict] = []
-        self._da_params: List[dict] = []
-        self._da_done = threading.Event()
         self._da_param_changes: deque = deque(maxlen=100)
         self._da_pc_counter = 0  # monotonic index; deque alone cannot address past events
+        self._da_walks: Dict[int, dict] = {}  # walk_id -> per-walk buffers (per-request isolation)
+        self._da_walk_gen = 0  # increments per da_walk() request
         self._fake: Optional["_FakeCubase"] = None
         self._started = False
         self._degraded_reason: Optional[str] = None
@@ -233,22 +231,36 @@ class MidiBridge:
                  "_n": self._da_pc_counter}
             )
         elif etype == "da_obj":
-            if self._da_walk_id is None or event["walk_id"] != self._da_walk_id:
-                self._da_objects = []
-                self._da_params = []
-                self._da_walk_id = event["walk_id"]
-                self._da_done.clear()
-            self._da_objects.append(event)
+            entry = self._walk_entry(event["walk_id"])
+            entry["objects"].append(event)
         elif etype == "da_param":
-            if self._da_walk_id is not None and event["walk_id"] == self._da_walk_id:
-                self._da_params.append(event)
+            entry = self._walk_entry(event["walk_id"])
+            entry["params"].append(event)
             self._da_param_changes.append(
                 {"seq": event["seq"], "tag": event["tag"], "value": event["value"],
-                 "title": event.get("title", ""), "display": event.get("display", "")}
+                 "title": event.get("title", ""), "display": event.get("display", ""),
+                 "_n": self._da_pc_counter}
             )
         elif etype == "da_done":
-            if self._da_walk_id is None or event["walk_id"] == self._da_walk_id:
-                self._da_done.set()
+            entry = self._walk_entry(event["walk_id"])
+            entry["count"] = event["count"]
+            entry["done"].set()
+
+    def _walk_entry(self, walk_id: int) -> dict:
+        entry = self._da_walks.get(walk_id)
+        if entry is None:
+            entry = {
+                "walk_id": walk_id,
+                "gen": self._da_walk_gen,  # attach to the pending request, if any
+                "objects": [],
+                "params": [],
+                "done": threading.Event(),
+            }
+            self._da_walks[walk_id] = entry
+            if len(self._da_walks) > 8:  # keep the map bounded
+                for k in sorted(self._da_walks, key=lambda k: self._da_walks[k]["gen"])[:-4]:
+                    self._da_walks.pop(k, None)
+        return entry
 
     # ---------------------------------------------------------------- output
     def _send_sysex_data(self, data: List[int]) -> None:
@@ -281,6 +293,7 @@ class MidiBridge:
         self.send_cc(cc, 127)
         time.sleep(0.05)
         self.send_cc(cc, 0)
+        time.sleep(0.15)  # let the host reflect the change before callers read state
 
     # ------------------------------------------------------------ inspection
     def state(self) -> dict:
@@ -300,6 +313,13 @@ class MidiBridge:
         with self._lock:
             items = list(self._recent)
         return items[-n:]
+
+    def drain_recent(self) -> List[dict]:
+        """Atomically return every buffered message and clear the buffer."""
+        with self._lock:
+            items = list(self._recent)
+            self._recent.clear()
+        return items
 
     def wait_for_ident(self, timeout: float = 3.0) -> bool:
         return self._ident_event.wait(timeout)
@@ -389,34 +409,39 @@ class MidiBridge:
         return None
 
     def select_track(self, name: str, max_steps: int = 64, settle: float = 0.15) -> dict:
+        """Search bank windows for a track and select it.
+
+        End-of-bank detection: the MIDI Remote API offers no explicit
+        "at last bank" signal, so we stop when the window signature stays
+        unchanged for two consecutive bank steps (tolerates a single pair of
+        adjacent windows with identical slot names), then sweep back to the
+        first window the same way.
+        """
         idx = self._find_in_window(name)
         steps = 0
         if idx is None:
-            # walk forward until the end of the bank
-            last_sig = self._window_signature()
+            unchanged = 0
             while steps < max_steps:
+                prev_sig = self._window_signature()
                 self.bank("next")
                 steps += 1
                 idx = self._find_in_window(name)
                 if idx is not None:
                     break
-                sig = self._window_signature()
-                if sig == last_sig:
-                    break  # reached the last bank window
-                last_sig = sig
-        if idx is None:
-            # walk back to the first bank window
-            last_sig = self._window_signature()
-            while steps < max_steps * 2:
+                unchanged = unchanged + 1 if self._window_signature() == prev_sig else 0
+                if unchanged >= 2:
+                    break  # bank did not move twice in a row -> likely last window
+            unchanged = 0
+            while idx is None and steps < max_steps * 2:
+                prev_sig = self._window_signature()
                 self.bank("prev")
                 steps += 1
                 idx = self._find_in_window(name)
                 if idx is not None:
                     break
-                sig = self._window_signature()
-                if sig == last_sig:
-                    break  # reached the first bank window
-                last_sig = sig
+                unchanged = unchanged + 1 if self._window_signature() == prev_sig else 0
+                if unchanged >= 2:
+                    break  # bank did not move twice in a row -> first window
         if idx is None:
             return {"found": False, "bank_steps": steps, "slots": self.state()["slots"]}
         self.select_slot(idx)
@@ -425,18 +450,34 @@ class MidiBridge:
 
     # ---------------------------------------------------------- direct access
     def da_walk(self, limit: int = 80, timeout: float = 3.0) -> dict:
+        """Request a DirectAccess walk and wait for its completion.
+
+        Responses are buffered per walk_id, so a delayed frame from another
+        walk can never pollute this request's result.
+        """
         with self._lock:
-            self._da_objects = []
-            self._da_params = []
-            self._da_walk_id = None
-            self._da_done.clear()
+            self._da_walk_gen += 1
+            gen = self._da_walk_gen
         self._send_sysex_data(P.cmd_da_walk(limit))
-        finished = self._da_done.wait(timeout)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                for entry in self._da_walks.values():
+                    if entry["gen"] == gen and entry["done"].is_set():
+                        return {
+                            "finished": True,
+                            "walk_id": entry["walk_id"],
+                            "objects": list(entry["objects"]),
+                            "params": list(entry["params"]),
+                        }
+            time.sleep(0.02)
+        with self._lock:
+            partial = [e for e in self._da_walks.values() if e["gen"] == gen]
         return {
-            "finished": finished,
-            "walk_id": self._da_walk_id,
-            "objects": list(self._da_objects),
-            "params": list(self._da_params),
+            "finished": False,
+            "walk_id": partial[0]["walk_id"] if partial else None,
+            "objects": list(partial[0]["objects"]) if partial else [],
+            "params": list(partial[0]["params"]) if partial else [],
         }
 
     def da_set_param(self, seq: int, tag: int, value01: float) -> dict:
@@ -728,12 +769,13 @@ class _FakeCubase:
             seq = P.join_u14(body[0], body[1])
             tag = P.join_u21(body[2], body[3], body[4])
             param = self._find_da_param(seq, tag)
-            value = param["value"] if param is not None else 0.5
+            if param is None:
+                return  # mirror the script: stay silent for unknown seq/tag
             self._emit(
                 [P.SYSEX_VENDOR_ID, P.SX.DA_PARAM_CHANGE]
                 + list(P.split_u14(seq))
                 + list(P.split_u21(tag))
-                + list(P.split_u14(round(value * 16383)))
+                + list(P.split_u14(round(param["value"] * 16383)))
             )
 
     def _find_da_param(self, seq: int, tag: int) -> Optional[dict]:
