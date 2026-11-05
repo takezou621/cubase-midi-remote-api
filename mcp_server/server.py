@@ -116,6 +116,8 @@ def cubase_set_channel(slot: int, param: str, value) -> dict:
     param: volume (0..1) | pan (0..1, 0.5=center) | mute | solo | record_arm | monitor | select (bool).
     Volume/pan are set with 14-bit precision via SysEx."""
     def run():
+        if not (0 <= slot < 8):
+            return {"error": "slot must be 0..7 (the visible bank window)"}
         if param in ("volume", "pan"):
             v = float(value)
             if not (0.0 <= v <= 1.0):
@@ -135,8 +137,12 @@ def cubase_set_channel(slot: int, param: str, value) -> dict:
 
 @mcp.tool()
 def cubase_set_send(slot: int, send_index: int, value: float) -> dict:
-    """Set a send level (send_index 0-based) of one of the 8 visible slots. value 0..1."""
+    """Set a send level (send_index 0-based, 0..1) of one of the 8 visible slots. value 0..1."""
     def run():
+        if not (0 <= slot < 8):
+            return {"error": "slot must be 0..7"}
+        if not (0 <= send_index < 2):
+            return {"error": "send_index must be 0 or 1 (CC-exposed sends)"}
         if not (0.0 <= value <= 1.0):
             return {"error": "value must be 0..1"}
         bridge.set_send(slot, send_index, value)
@@ -148,6 +154,8 @@ def cubase_set_send(slot: int, send_index: int, value: float) -> dict:
 def cubase_quick_control(index: int, value: float) -> dict:
     """Set Quick Control `index` (0..7) of the selected track. value 0..1."""
     def run():
+        if not (0 <= index < 8):
+            return {"error": "index must be 0..7"}
         if not (0.0 <= value <= 1.0):
             return {"error": "value must be 0..1"}
         bridge.quick_control(index, value)
