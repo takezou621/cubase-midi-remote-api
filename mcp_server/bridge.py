@@ -434,37 +434,49 @@ class MidiBridge:
         self._press_cc(cc)
 
     # --------------------------------------------------------- track finding
-    def select_track(self, name: str, max_steps: int = 256, settle: float = 0.3) -> dict:
-        """Select a track by (substring) name.
+    def select_track(self, name: str, max_steps: int = 12, settle: float = 0.8) -> dict:
+        """Select a track by (substring) name, walking the visible bank window.
 
-        Walks the project's track selection with the trackNext action and
-        matches against the selected track's name (read via DirectAccess),
-        so this works regardless of the visible mixer bank window.
+        Slot names arrive via the fader surface value's title callback, so the
+        visible 8-slot window is searched first; if the name is not found the
+        bank is stepped until the window stops changing (or wraps).
         """
         lowered = name.lower()
 
-        def selected_name() -> str:
-            return (self.query_selected_name(timeout=1.2) or "").lower()
+        def find():
+            for s in self.state()["slots"]:
+                if s["exists"] and s["name"] and lowered in s["name"].lower():
+                    return s
+            return None
 
-        current = selected_name()
+        def signature():
+            return tuple(s["name"] for s in self.state()["slots"])
+
+        target = find()
         steps = 0
-        if current and lowered in current:
-            return {"found": True, "track": self.state()["slots"][0]["name"] or current,
-                    "selected_name": current, "steps": 0}
-
-        first = current
-        for _ in range(max_steps):
-            self.send_cc(P.CC.track_next, 127)
-            time.sleep(0.05)
-            self.send_cc(P.CC.track_next, 0)
-            steps += 1
-            time.sleep(settle)
-            current = selected_name()
-            if current and lowered in current:
-                return {"found": True, "selected_name": current, "steps": steps}
-            if first and current == first:
-                break  # full cycle without a hit
-        return {"found": False, "steps": steps}
+        if target is None:
+            seen = [signature()]
+            for direction in ("next", "prev"):
+                seen = [signature()]
+                for _ in range(max_steps):
+                    self.bank(direction)
+                    steps += 1
+                    time.sleep(settle)
+                    target = find()
+                    if target is not None:
+                        break
+                    sig = signature()
+                    if sig in seen:
+                        break  # window did not move -> end of bank in this direction
+                    seen.append(sig)
+                if target is not None:
+                    break
+        if target is None:
+            return {"found": False, "steps": steps,
+                    "slots": [s["name"] for s in self.state()["slots"]]}
+        self.select_slot(target["slot"])
+        return {"found": True, "slot": target["slot"], "track": target["name"],
+                "steps": steps}
 
     # ---------------------------------------------------------- direct access
     def da_walk(self, limit: int = 80, timeout: float = 3.0) -> dict:
@@ -666,6 +678,29 @@ class _FakeCubase:
         pressed = value >= 64
         if not pressed:
             return
+        # select CC (56..63): select the corresponding slot's track
+        if P.CC.select_base <= cc < P.CC.select_base + NUM_SLOTS:
+            slot_i = cc - P.CC.select_base
+
+            def _select(i=slot_i):
+                gi = self.bank_start + i
+                self.track_index = -1 if self.track_index == gi else gi
+                self._refresh_window()
+                for j in range(NUM_SLOTS):
+                    self._slot(j)
+            return _select()
+
+        # mute/solo/recarm/monitor CC toggles (CC is slot-param base + slot)
+        for param_base, key in ((P.CC.mute_base, "mute"), (P.CC.solo_base, "solo"),
+                                (P.CC.recarm_base, "record_arm"), (P.CC.monitor_base, "monitor")):
+            if param_base <= cc < param_base + NUM_SLOTS:
+                slot_i = cc - param_base
+                if self.slots[slot_i]["exists"]:
+
+                    def _toggle(i=slot_i, k=key):
+                        self.slots[i][k] = not self.slots[i][k]
+                        self._slot(i)
+                    return _toggle()
         mapping = {
             P.CC.bank_next: lambda: self._bank("next"),
             P.CC.bank_prev: lambda: self._bank("prev"),

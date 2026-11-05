@@ -808,6 +808,7 @@ midiInput.mOnSysex = function (activeDevice, message) {
         case SX.SELECTED_NAME: {
             // DirectAccess title of the selected track (needs API v1.2+)
             if (!da || !gActiveMapping) return
+            da.update(gActiveMapping) // refresh runtime IDs before reading
             var sbase = da.getBaseObjectID(gActiveMapping)
             if (sbase < 0) return
             var stitle = ''
