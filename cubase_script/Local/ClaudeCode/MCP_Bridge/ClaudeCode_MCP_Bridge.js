@@ -186,7 +186,7 @@ function decodeString(data, idx) {
 var gSlots = []
 for (var si = 0; si < NUM_CHANNELS; ++si) {
     gSlots.push({
-        name: '', vol: -1, pan: -1,
+        name: '', vol: -1, pan: -1, volSeen: false,
         selected: 0, mute: 0, solo: 0, recarm: 0, monitor: 0
     })
 }
@@ -263,7 +263,7 @@ function makeStrip(channelIndex, x, channel) {
     }
 
     // --- host bindings ---
-    page.makeValueBinding(strip.btnSelect.mSurfaceValue, strip.channel.mValue.mSelected)
+    page.makeValueBinding(strip.btnSelect.mSurfaceValue, strip.channel.mValue.mSelected).setTypeToggle()
     page.makeValueBinding(strip.btnMute.mSurfaceValue, strip.channel.mValue.mMute).setTypeToggle()
     page.makeValueBinding(strip.btnSolo.mSurfaceValue, strip.channel.mValue.mSolo).setTypeToggle()
     page.makeValueBinding(strip.btnRecarm.mSurfaceValue, strip.channel.mValue.mRecordEnable).setTypeToggle()
@@ -282,10 +282,20 @@ function makeStrip(channelIndex, x, channel) {
             gSlotDirty[channelIndex] = true
         }
     }
+    // some host versions only push the initial title through the surface
+    // value's own title change (objectTitle = channel name)
+    strip.fader.mSurfaceValue.mOnTitleChange = function (activeDevice, objectTitle, valueTitle) {
+        var s = gSlots[channelIndex]
+        if (objectTitle && objectTitle !== s.name) {
+            s.name = objectTitle
+            gSlotDirty[channelIndex] = true
+        }
+    }
 
     // --- value feedback -> cache ---
     strip.fader.mSurfaceValue.mOnProcessValueChange = function (activeDevice, value) {
         gSlots[channelIndex].vol = Math.round(value * 16383)
+        gSlots[channelIndex].volSeen = true
         gSlotDirty[channelIndex] = true
     }
     strip.panKnob.mSurfaceValue.mOnProcessValueChange = function (activeDevice, value) {
@@ -503,7 +513,7 @@ function sendSlotInfo(activeDevice, slotIndex) {
     if (s.solo) flags |= 4
     if (s.recarm) flags |= 8
     if (s.monitor) flags |= 16
-    if (s.name.length > 0) flags |= 32
+    if (s.name.length > 0 || s.volSeen) flags |= 32
     // NOTE: outSysex() already prepends the command byte — payload starts after it
     var payload = [slotIndex, flags]
     pushU14(payload, s.vol < 0 ? 0 : s.vol)
@@ -655,11 +665,15 @@ function pulseButton(activeDevice, btn) {
     btn.mSurfaceValue.setProcessValue(activeDevice, 0)
 }
 
-// set a toggle-typed button to a desired state (press only when it differs)
+// set a toggle-typed button to a desired state.
+// feedback keeps the surface value latched at the host state, so a plain
+// set(1) would not create a 0->1 edge — simulate a full click instead.
 function toggleTo(activeDevice, btn, desiredOn) {
     var cur = btn.mSurfaceValue.getProcessValue(activeDevice) > 0.5
     if (cur !== (desiredOn > 0.5)) {
+        btn.mSurfaceValue.setProcessValue(activeDevice, 0)
         btn.mSurfaceValue.setProcessValue(activeDevice, 1)
+        btn.mSurfaceValue.setProcessValue(activeDevice, 0)
     }
 }
 
