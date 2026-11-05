@@ -92,6 +92,7 @@ class MidiBridge:
         self._ident_event = threading.Event()
         self._da_param_changes: deque = deque(maxlen=100)
         self._da_pc_counter = 0  # monotonic index; deque alone cannot address past events
+        self._selected_name: Optional[str] = None
         self._da_walks: Dict[int, dict] = {}  # walk_id -> per-walk buffers (per-request isolation)
         self._da_walk_gen = 0  # increments per da_walk() request
         self._fake: Optional["_FakeCubase"] = None
@@ -236,6 +237,13 @@ class MidiBridge:
             self._state["plugin"] = {
                 k: v for k, v in event.items() if k != "type"
             }
+        elif etype == "selected_name":
+            self._selected_name = event.get("name", "")
+            for s in self._state["slots"]:
+                if s["selected"]:
+                    if s["name"] != self._selected_name:
+                        s["name"] = self._selected_name
+                        s["exists"] = True
         elif etype == "da_param_change":
             self._da_pc_counter += 1
             self._da_param_changes.append(
@@ -356,14 +364,34 @@ class MidiBridge:
         self._send_sysex_data(P.cmd_set_send(slot, send_index, round(value01 * 16383)))
 
     def set_toggle_param(self, slot: int, param: str, on: bool) -> None:
-        cmd = TOGGLE_SYSEX.get(param)
-        if cmd is None:
-            raise BridgeError(f"param must be one of {sorted(TOGGLE_SYSEX)}")
-        self._send_sysex_data(P.cmd_set_toggle(cmd, slot, on))
+        """Toggle mute/solo/record_arm/monitor via a real CC press.
+
+        Toggle bindings respond to the press EDGE, and host feedback keeps the
+        surface value latched — so the reliable path is a real CC press/release
+        gated by the cached state (no-op when already in the desired state).
+        """
+        cc = P.CC.slot_param_cc(param, slot)
+        if cc is None:
+            raise BridgeError(f"invalid param/slot: {param}/{slot}")
+        if bool(self.state()["slots"][slot].get(param)) is bool(on):
+            return
+        self._press_cc(cc)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if bool(self.state()["slots"][slot].get(param)) is bool(on):
+                return
+            time.sleep(0.1)
 
     def select_slot(self, slot: int, on: bool = True) -> None:
-        self._send_sysex_data(P.cmd_select_slot(slot, on))
-        time.sleep(0.1)
+        cc = P.CC.select_base + slot
+        if bool(self.state()["slots"][slot]["selected"]) is bool(on):
+            return
+        self._press_cc(cc)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if bool(self.state()["slots"][slot]["selected"]) is bool(on):
+                return
+            time.sleep(0.1)
 
     def quick_control(self, index: int, value01: float) -> None:
         self._send_sysex_data(P.cmd_set_qc(index, round(value01 * 16383)))
@@ -406,59 +434,37 @@ class MidiBridge:
         self._press_cc(cc)
 
     # --------------------------------------------------------- track finding
-    def _window_signature(self) -> tuple:
-        return tuple(s["name"] for s in self.state()["slots"])
+    def select_track(self, name: str, max_steps: int = 256, settle: float = 0.3) -> dict:
+        """Select a track by (substring) name.
 
-    def _find_in_window(self, name: str) -> Optional[int]:
-        slots = self.state()["slots"]
-        lowered = name.lower()
-        for s in slots:
-            if s["exists"] and s["name"].lower() == lowered:
-                return s["slot"]
-        matches = [s["slot"] for s in slots if s["exists"] and lowered in s["name"].lower()]
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
-    def select_track(self, name: str, max_steps: int = 64, settle: float = 0.15) -> dict:
-        """Search bank windows for a track and select it.
-
-        End-of-bank detection: the MIDI Remote API offers no explicit
-        "at last bank" signal, so we stop when the window signature stays
-        unchanged for two consecutive bank steps (tolerates a single pair of
-        adjacent windows with identical slot names), then sweep back to the
-        first window the same way.
+        Walks the project's track selection with the trackNext action and
+        matches against the selected track's name (read via DirectAccess),
+        so this works regardless of the visible mixer bank window.
         """
-        idx = self._find_in_window(name)
+        lowered = name.lower()
+
+        def selected_name() -> str:
+            return (self.query_selected_name(timeout=1.2) or "").lower()
+
+        current = selected_name()
         steps = 0
-        if idx is None:
-            unchanged = 0
-            while steps < max_steps:
-                prev_sig = self._window_signature()
-                self.bank("next")
-                steps += 1
-                idx = self._find_in_window(name)
-                if idx is not None:
-                    break
-                unchanged = unchanged + 1 if self._window_signature() == prev_sig else 0
-                if unchanged >= 2:
-                    break  # bank did not move twice in a row -> likely last window
-            unchanged = 0
-            while idx is None and steps < max_steps * 2:
-                prev_sig = self._window_signature()
-                self.bank("prev")
-                steps += 1
-                idx = self._find_in_window(name)
-                if idx is not None:
-                    break
-                unchanged = unchanged + 1 if self._window_signature() == prev_sig else 0
-                if unchanged >= 2:
-                    break  # bank did not move twice in a row -> first window
-        if idx is None:
-            return {"found": False, "bank_steps": steps, "slots": self.state()["slots"]}
-        self.select_slot(idx)
-        return {"found": True, "slot": idx, "bank_steps": steps,
-                "track": self.state()["slots"][idx]["name"]}
+        if current and lowered in current:
+            return {"found": True, "track": self.state()["slots"][0]["name"] or current,
+                    "selected_name": current, "steps": 0}
+
+        first = current
+        for _ in range(max_steps):
+            self.send_cc(P.CC.track_next, 127)
+            time.sleep(0.05)
+            self.send_cc(P.CC.track_next, 0)
+            steps += 1
+            time.sleep(settle)
+            current = selected_name()
+            if current and lowered in current:
+                return {"found": True, "selected_name": current, "steps": steps}
+            if first and current == first:
+                break  # full cycle without a hit
+        return {"found": False, "steps": steps}
 
     # ---------------------------------------------------------- direct access
     def da_walk(self, limit: int = 80, timeout: float = 3.0) -> dict:
@@ -509,6 +515,21 @@ class MidiBridge:
             time.sleep(0.02)
         return {"seq": seq, "tag": tag, "value": None, "timeout": True}
 
+    def query_selected_name(self, timeout: float = 1.5) -> Optional[str]:
+        """Query the selected track's name (DirectAccess title via the script)."""
+        with self._cond:
+            self._selected_name = None  # clear stale value
+        self._send_sysex_data(P.cmd_selected_name())
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._cond:
+                if self._selected_name is not None:
+                    name = self._selected_name
+                    self._selected_name = None  # consume
+                    return name
+            time.sleep(0.05)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Fake Cubase (dummy backend) — emulates the JS script for dry testing
@@ -546,6 +567,7 @@ class _FakeCubase:
         self.locator_fmt = "Bars.Beats"
         self.playing = False
         self.selected = 0
+        self.track_index = 0
         self.slots = [
             {
                 "exists": False, "name": "", "selected": False, "mute": False,
@@ -558,13 +580,18 @@ class _FakeCubase:
         self._refresh_window()
 
     # ---------------------------------------------------------------- helpers
+    def _step_track(self, delta: int) -> None:
+        count = len(self.TRACKS)
+        self.track_index = (self.track_index + delta) % count
+        self._refresh_window()
+
     def _refresh_window(self) -> None:
         window = self.TRACKS[self.bank_start:self.bank_start + NUM_SLOTS]
         for i, slot in enumerate(self.slots):
             if i < len(window):
                 slot["exists"] = True
                 slot["name"] = window[i]
-                slot["selected"] = (self.bank_start + i == self.selected)
+                slot["selected"] = (self.bank_start + i == self.track_index)
             else:
                 slot["exists"] = False
                 slot["name"] = ""
@@ -645,6 +672,8 @@ class _FakeCubase:
             P.CC.bank_shift_left: lambda: self._bank("shift_left"),
             P.CC.bank_shift_right: lambda: self._bank("shift_right"),
             P.CC.bank_reset: lambda: self._bank("reset"),
+            P.CC.track_next: lambda: self._step_track(1),
+            P.CC.track_prev: lambda: self._step_track(-1),
             P.CC.play: lambda: setattr(self, "playing", not self.playing),
             P.CC.stop: lambda: setattr(self, "playing", False),
             P.CC.record: lambda: setattr(self, "recording", not getattr(self, "recording", False)),
@@ -685,17 +714,23 @@ class _FakeCubase:
             self._snapshot()
         elif cmd == P.SX.SELECT_SLOT:
             slot = body[0]
-            self.selected = self.bank_start + slot
+            self.track_index = self.bank_start + slot
             self._refresh_window()
             for i in range(NUM_SLOTS):
                 self._slot(i)
         elif cmd == P.SX.DESELECT_SLOT:
             slot = body[0]
-            if self.bank_start + slot == self.selected:
-                self.selected = -1
+            if self.bank_start + slot == self.track_index:
+                self.track_index = -1
             self._refresh_window()
             for i in range(NUM_SLOTS):
                 self._slot(i)
+        elif cmd == P.SX.SELECTED_NAME:
+            # selected track's name (mirrors the real script's DA title read)
+            name = self.TRACKS[self.track_index] if 0 <= self.track_index < len(self.TRACKS) else ""
+            self._emit(
+                [P.SYSEX_VENDOR_ID, P.SX.SELECTED_NAME_OUT] + P.encode_string(name)
+            )
         elif cmd == P.SX.SET_VOLUME:
             slot = body[0]
             self.slots[slot]["volume"] = P.join_u14(body[1], body[2]) / 16383.0

@@ -68,10 +68,10 @@ var SX = {
     SET_MUTE: 0x06, SET_SOLO: 0x07, SET_RECARM: 0x08, SET_MONITOR: 0x09,
     SET_QC: 0x0A, LOCATE: 0x0B, SET_TEMPO: 0x0C,
     DA_WALK: 0x0D, DA_SET: 0x0E, DA_GET: 0x0F,
-    BANK: 0x10, PING: 0x11, SNAPSHOT: 0x12, DESELECT_SLOT: 0x13,
+    BANK: 0x10, PING: 0x11, SNAPSHOT: 0x12, DESELECT_SLOT: 0x13, SELECTED_NAME: 0x14,
     // out
     TRANSPORT: 0x20, SLOT: 0x21, QC: 0x22, PLUGIN: 0x23, DA_PARAM_CHANGE: 0x24,
-    DA_OBJ: 0x25, DA_PARAM: 0x26, DA_DONE: 0x27, IDENT: 0x6E
+    DA_OBJ: 0x25, DA_PARAM: 0x26, DA_DONE: 0x27, SELECTED_NAME_OUT: 0x28, IDENT: 0x6E
 }
 
 var IDENT_STRING = 'ClaudeCode MCP_Bridge v1'
@@ -803,6 +803,18 @@ midiInput.mOnSysex = function (activeDevice, message) {
                 pushU14(payload2, Math.round(pv2 * 16383))
                 outSysex(activeDevice, SX.DA_PARAM_CHANGE, payload2)
             }
+            break
+        }
+        case SX.SELECTED_NAME: {
+            // DirectAccess title of the selected track (needs API v1.2+)
+            if (!da || !gActiveMapping) return
+            var sbase = da.getBaseObjectID(gActiveMapping)
+            if (sbase < 0) return
+            var stitle = ''
+            try { stitle = da.getObjectTitle(gActiveMapping, sbase) } catch (e) { }
+            var spl = []
+            pushString(spl, stitle, STR_MAX_UNITS)
+            outSysex(activeDevice, SX.SELECTED_NAME_OUT, spl)
             break
         }
         case SX.BANK: {

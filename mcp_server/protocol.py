@@ -39,6 +39,7 @@ class SX:
     BANK = 0x10
     PING = 0x11
     SNAPSHOT = 0x12
+    SELECTED_NAME = 0x14
 
     # Cubase -> MCP
     TRANSPORT = 0x20
@@ -49,6 +50,7 @@ class SX:
     DA_OBJ = 0x25
     DA_PARAM = 0x26
     DA_DONE = 0x27
+    SELECTED_NAME_OUT = 0x28
     IDENT = 0x6E
 
 
@@ -206,6 +208,11 @@ def cmd_snapshot() -> List[int]:
     return sysex_data(SX.SNAPSHOT)
 
 
+def cmd_selected_name() -> List[int]:
+    """Ask the script for the selected track's name (via DirectAccess)."""
+    return sysex_data(SX.SELECTED_NAME)
+
+
 def cmd_select_slot(slot: int, on: bool = True) -> List[int]:
     cmd = SX.SELECT_SLOT if on else SX.DESELECT_SLOT
     return sysex_data(cmd, [slot])
@@ -273,6 +280,10 @@ def parse_feedback(data: List[int]) -> Optional[dict]:
     if cmd == SX.IDENT:
         text, _ = decode_string(body, 0)
         return {"type": "ident", "text": text}
+
+    if cmd == SX.SELECTED_NAME_OUT:
+        name, _ = decode_string(body, 0)
+        return {"type": "selected_name", "name": name}
 
     if cmd == SX.TRANSPORT and len(body) >= 3:
         flags = body[0]
