@@ -260,8 +260,15 @@ def cubase_raw_sysex(payload_hex: str) -> dict:
 
 
 def main() -> None:
-    bridge.start()
-    log.info("cubase MCP bridge starting (backend=%s)", bridge.backend)
+    try:
+        bridge.start()
+        log.info("cubase MCP bridge starting (backend=%s)", bridge.backend)
+    except BridgeError as exc:
+        # Degraded start: keep the MCP server alive so tool calls return
+        # actionable errors instead of crashing the whole server.
+        log.warning("MIDI ports unavailable (%s). Tools will report this error "
+                    "until the virtual MIDI port (IAC/loopMIDI) is enabled and "
+                    "the server restarts.", exc)
     mcp.run()
 
 

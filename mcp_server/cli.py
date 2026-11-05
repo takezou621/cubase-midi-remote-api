@@ -36,8 +36,12 @@ def cmd_list_ports(_args) -> int:
 
 
 def cmd_monitor(args) -> int:
-    bridge = _make_bridge(args)
-    bridge.start()
+    try:
+        bridge = _make_bridge(args)
+        bridge.start()
+    except BridgeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     print(f"Monitoring {bridge.backend} backend... Ctrl-C to stop")
     try:
         while True:
@@ -54,8 +58,12 @@ def cmd_monitor(args) -> int:
 
 
 def cmd_test(args) -> int:
-    bridge = _make_bridge(args)
-    bridge.start()
+    try:
+        bridge = _make_bridge(args)
+        bridge.start()
+    except BridgeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     ok = True
     print("== ping ==")
     result = bridge.ping()
