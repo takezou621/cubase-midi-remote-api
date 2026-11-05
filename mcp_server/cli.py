@@ -16,6 +16,7 @@ def _make_bridge(args) -> MidiBridge:
         in_port=getattr(args, "in_port", None) or os.environ.get("CUBASE_MIDI_IN"),
         out_port=getattr(args, "out_port", None) or os.environ.get("CUBASE_MIDI_OUT"),
         backend=getattr(args, "backend", None) or os.environ.get("CUBASE_MIDI_BACKEND", "rtmidi"),
+        virtual=os.environ.get("CUBASE_MIDI_VIRTUAL", "") not in ("", "0", "false"),
     )
 
 

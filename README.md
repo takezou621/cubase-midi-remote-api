@@ -45,7 +45,17 @@ Cubase から MCP 側へ SysEx で返せます(プロトコルの詳細は [PROT
 2. 「IAC Driver」をダブルクリック →「装置はオンライン」にチェック
 3. バスが無い場合は「+」で Bus 1 を作成(既定で Bus 1 があります)
 
-確認: `./.venv/bin/python -m mcp_server.cli list-ports` に `IAC Driver Bus 1` が出れば OK。
+**macOS で IAC を使わない選択肢**: 環境変数 `CUBASE_MIDI_VIRTUAL=1` を付けると、
+ブリッジが起動時に CoreMIDI 仮想ポート `MCP Bridge In` / `MCP Bridge Out` を
+自前で生成します(IAC 設定不要。スクリプトの検出条件がこの名前に一致します)。
+
+```bash
+CUBASE_MIDI_VIRTUAL=1 ./.venv/bin/python -m mcp_server.cli monitor
+# .mcp.json で使う場合は env に {"CUBASE_MIDI_VIRTUAL": "1"} を設定
+```
+
+確認: `./.venv/bin/python -m mcp_server.cli list-ports` に `IAC Driver Bus 1`
+(または `MCP Bridge In/Out`)が出れば OK。
 
 ### 2. MIDI Remote スクリプトをインストール
 
@@ -149,7 +159,7 @@ PROTOCOL.md        # プロトコル仕様
   送るため、MCP 側を後から起動しても状態が追いつきます
 - トラック名は日本語を含む場合も UTF-16 コード単位で転送するので文字化けしません
 - 設定は環境変数で上書きできます: `CUBASE_MIDI_IN` / `CUBASE_MIDI_OUT` /
-  `CUBASE_MIDI_BACKEND` (rtmidi | dummy)
+  `CUBASE_MIDI_BACKEND` (rtmidi | dummy) / `CUBASE_MIDI_VIRTUAL` (=1 で仮想ポート生成)
 
 ## 参照
 

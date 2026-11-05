@@ -78,8 +78,10 @@ class MidiBridge:
         in_port: Optional[str] = None,
         out_port: Optional[str] = None,
         backend: str = "rtmidi",
+        virtual: bool = False,
     ) -> None:
         self.backend = backend
+        self.virtual = virtual
         self._in_port_name = in_port
         self._out_port_name = out_port
         self._mido_in: Optional[mido.ports.BaseInput] = None
@@ -155,6 +157,16 @@ class MidiBridge:
         self._started = False
 
     def _start_rtmidi(self) -> None:
+        if self.virtual:
+            # CoreMIDI virtual ports: no IAC/loopMIDI setup required. The
+            # Cubase script's detection units already match the "MCP Bridge"
+            # port names.
+            in_name = self._in_port_name or "MCP Bridge In"
+            out_name = self._out_port_name or "MCP Bridge Out"
+            log.info("opening VIRTUAL MIDI ports '%s' / '%s'", in_name, out_name)
+            self._mido_in = mido.open_input(in_name, virtual=True, callback=self._on_mido_message)
+            self._mido_out = mido.open_output(out_name, virtual=True)
+            return
         inputs = mido.get_input_names()
         outputs = mido.get_output_names()
         in_name = resolve_port(self._in_port_name, inputs, "input")

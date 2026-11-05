@@ -35,6 +35,7 @@ bridge = MidiBridge(
     in_port=os.environ.get("CUBASE_MIDI_IN"),
     out_port=os.environ.get("CUBASE_MIDI_OUT"),
     backend=os.environ.get("CUBASE_MIDI_BACKEND", "rtmidi"),
+    virtual=os.environ.get("CUBASE_MIDI_VIRTUAL", "") not in ("", "0", "false"),
 )
 atexit.register(bridge.stop)
 
