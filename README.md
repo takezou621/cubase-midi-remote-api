@@ -28,7 +28,9 @@ Cubase から MCP 側へ SysEx で返せます(プロトコルの詳細は [PROT
 
 できないこと(API の制限):
 
-- トラックの作成・削除、複数トラックの同時選択、MIDI ノートやアレンジの編集
+- トラック作成/削除や選択変更を **MixerChannel の API として直接**行うこと(複数トラックの同時選択、
+  MIDI ノートやアレンジの編集も不可)。ただしトラック追加などのキーコマンドを `KC_SLOTS` に
+  登録すれば、キーコマンド経由で実行できます(上記の通り)
 - プロジェクトファイル (.cpr) の解析(非公開形式のため)
 - スクリプトはサンドボックス内で動作するため HTTP・ファイルアクセスは不可
 
@@ -83,6 +85,8 @@ Cubase の状態を確認して(cubase_state)、Bass トラックのボリュー
 ターミナルから単体テストする場合:
 
 ```bash
+./.venv/bin/python tests/test_end_to_end.py     # フェイク Cubase による一括テスト (Cubase 不要)
+./.venv/bin/python tests/test_js_protocol.py    # JS スクリプトのプロトコル適合テスト (Node.js 必須)
 ./.venv/bin/python -m mcp_server.cli test                       # 実機に対して
 CUBASE_MIDI_BACKEND=dummy ./.venv/bin/python -m mcp_server.cli test   # Cubaseなしの模擬応答でテスト
 ```
@@ -90,7 +94,8 @@ CUBASE_MIDI_BACKEND=dummy ./.venv/bin/python -m mcp_server.cli test   # Cubase�
 トラブルシュート:
 
 - `cubase_ping` が応答しない → MIDI Remote パネルが開いているか、スクリプトがインストール
-  されているか、IAC が有効か確認。`cli monitor` で双方向の MIDI を観察できます。
+  されているか、IAC が有効か確認。`./.venv/bin/python -m mcp_server.cli monitor`
+  で双方向の MIDI を観察できます。
 - デバイスが自動検出されない → MIDI Remote パネル右上の「+」から
   `ClaudeCode MCP_Bridge` を手動追加します(IAC Bus 1 を選択)。
 - スクリプトを書き換えたら「Reload Scripts」で即反映されます。

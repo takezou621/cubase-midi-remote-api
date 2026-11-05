@@ -125,7 +125,10 @@ def cubase_set_channel(slot: int, param: str, value) -> dict:
             bridge.set_volume(slot, v) if param == "volume" else bridge.set_pan(slot, v)
         elif param in ("mute", "solo", "record_arm", "monitor", "select"):
             if param == "select":
-                bridge.select_slot(slot)
+                if value:
+                    bridge.select_slot(slot)
+                else:
+                    bridge.select_slot(slot, on=False)
             else:
                 bridge.set_toggle_param(slot, param, bool(value))
         else:
@@ -252,7 +255,7 @@ def cubase_da_get_param(seq: int, param_tag: int) -> dict:
 @mcp.tool()
 def cubase_raw_sysex(payload_hex: str) -> dict:
     """Send a raw 0x7D SysEx command (advanced). payload_hex excludes F0/F7 and the
-    0x7D id, e.g. '10 00 40 00' = SET_VOLUME slot 0 to mid. See PROTOCOL.md."""
+    0x7D id, e.g. '03 00 20 00' = SET_VOLUME slot 0 to mid (0x20 = 8192). See PROTOCOL.md."""
     def run():
         try:
             payload = [int(x, 16) for x in payload_hex.replace(",", " ").split()]
@@ -274,6 +277,7 @@ def main() -> None:
     except BridgeError as exc:
         # Degraded start: keep the MCP server alive so tool calls return
         # actionable errors instead of crashing the whole server.
+        bridge.mark_degraded(str(exc))
         log.warning("MIDI ports unavailable (%s). Tools will report this error "
                     "until the virtual MIDI port (IAC/loopMIDI) is enabled and "
                     "the server restarts.", exc)

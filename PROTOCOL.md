@@ -81,7 +81,8 @@ MCP → Cubase で送ると操作、Cubase → MCP で返ってくるのが現�
 
 | cmd  | 名前            | payload                                    | 概要 |
 |------|-----------------|--------------------------------------------|------|
-| 0x01 | SELECT_SLOT     | slot                                       | slot のチャンネルを選択 |
+| 0x01 | SELECT_SLOT     | slot                                       | slot のチャンネルを選択(他の選択を解除) |
+| 0x13 | DESELECT_SLOT   | slot                                       | slot のチャンネルの選択を解除 |
 | 0x02 | KC_SLOT         | slot                                       | キーコマンドスロット 0–5 を発火 |
 | 0x03 | SET_VOLUME      | slot, volHi, volLo                         | Volume (14bit, 0–16383) |
 | 0x04 | SET_PAN         | slot, valHi, valLo                         | Pan (14bit, 8192 = center) |
@@ -94,10 +95,10 @@ MCP → Cubase で送ると操作、Cubase → MCP で返ってくるのが現�
 | 0x0B | LOCATE          | 文字列 (LOC_FORMAT 参照)                   | ロケーター移動 (例 `2.3.1.0`) |
 | 0x0C | SET_TEMPO       | bpm10Hi, bpm10Lo                           | テンポ設定 (BPM×10, 14bit) |
 | 0x0D | DA_WALK         | limitHi, limitLo                           | DirectAccess ツリー列挙 (Cubase 13+) |
-| 0x0E | DA_SET          | seq, tagHi, tagMid, tagLo, valHi, valLo    | 列挙済みオブジェクトのパラメーター設定 (process value 14bit) |
-| 0x0F | DA_GET          | seq, tagHi, tagMid, tagLo                  | パラメーター値の読み出し |
+| 0x0E | DA_SET          | seqHi, seqLo, tagHi, tagMid, tagLo, valHi, valLo | 列挙済みオブジェクトのパラメーター設定 (seq=14bit, tag=21bit, process value=14bit) |
+| 0x0F | DA_GET          | seqHi, seqLo, tagHi, tagMid, tagLo         | パラメーター値の読み出し (seq=14bit, tag=21bit) |
 | 0x10 | BANK            | step (0=next,1=prev,2=shiftL,3=shiftR,4=reset) | バンク移動 (SysEx 経由) |
-| 0x11 | PING            | —                                          | 接続テスト → 0x20 IDENT 応答 |
+| 0x11 | PING            | —                                          | 接続テスト → 全状態スナップショット (先頭が 0x6E IDENT) を応答 |
 | 0x12 | SNAPSHOT        | —                                          | 全状態の再送を要求 |
 
 > LOC_FORMAT で位置文字列はスクリプトへ `[mode][len][ascii...]` で渡す (常に ASCII モード)。
@@ -110,11 +111,15 @@ MCP → Cubase で送ると操作、Cubase → MCP で返ってくるのが現�
 | 0x21 | SLOT        | slot, flags, volHi, volLo, panHi, panLo, 名称文字列  | 変化時 + ハートビート |
 | 0x22 | QC          | idx, valHi, valLo                                    | 変化時 + ハートビート |
 | 0x23 | PLUGIN      | role, 名称, ベンダー, バージョン (各文字列)          | プラグイン変化時 |
-| 0x24 | DA_PARAM    | seq, tag(21bit), valHi, valLo                        | DA 監視中のパラメーター変化 |
-| 0x25 | DA_OBJ      | walkId, seq, parentSeq, 型名文字列, タイトル文字列   | DA_WALK 応答 |
-| 0x26 | DA_PARAM    | walkId, seq, tag(21bit), valHi, valLo, タイトル, 表示値 | DA_WALK 応答 |
+| 0x24 | DA_PARAM_CHANGE | seq(14bit), tag(21bit), valHi, valLo             | DA 監視中のパラメーター変化・DA_GET 応答 |
+| 0x25 | DA_OBJ      | walkId, seq(14bit), parentSeq(14bit), 型名文字列, タイトル文字列 | DA_WALK 応答 |
+| 0x26 | DA_PARAM    | walkId, seq(14bit), tag(21bit), valHi, valLo, タイトル, 表示値 | DA_WALK 応答 |
 | 0x27 | DA_DONE     | walkId, countHi, countLo                             | DA_WALK 完了 |
-| 0x6E | IDENT       | 識別文字列                                           | ページ有効化時 / SNAPSHOT 時 |
+| 0x6E | IDENT       | 識別文字列                                           | ページ有効化時 / SNAPSHOT / PING 応答時 |
+
+> **文字列フィールドの形式**: 上記の「◯◯文字列」はすべて
+> `[present(0/1)][mode][unitLen][データ...]` です。`present` は常に 1
+> (将来の省略用プレースホルダー)。文字列本体は 2. 節のエンコードに従います。
 
 **TRANSPORT flags ビット**: `bit0 = 再生中 (mStart)`, `bit1 = 録音中 (mRecord)`, `bit2 = Cycle`, `bit3 = Metronome`
 

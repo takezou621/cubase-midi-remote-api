@@ -68,7 +68,7 @@ var SX = {
     SET_MUTE: 0x06, SET_SOLO: 0x07, SET_RECARM: 0x08, SET_MONITOR: 0x09,
     SET_QC: 0x0A, LOCATE: 0x0B, SET_TEMPO: 0x0C,
     DA_WALK: 0x0D, DA_SET: 0x0E, DA_GET: 0x0F,
-    BANK: 0x10, PING: 0x11, SNAPSHOT: 0x12,
+    BANK: 0x10, PING: 0x11, SNAPSHOT: 0x12, DESELECT_SLOT: 0x13,
     // out
     TRANSPORT: 0x20, SLOT: 0x21, QC: 0x22, PLUGIN: 0x23, DA_PARAM_CHANGE: 0x24,
     DA_OBJ: 0x25, DA_PARAM: 0x26, DA_DONE: 0x27, IDENT: 0x6E
@@ -504,7 +504,8 @@ function sendSlotInfo(activeDevice, slotIndex) {
     if (s.recarm) flags |= 8
     if (s.monitor) flags |= 16
     if (s.name.length > 0) flags |= 32
-    var payload = [SX.SLOT, slotIndex, flags]
+    // NOTE: outSysex() already prepends the command byte — payload starts after it
+    var payload = [slotIndex, flags]
     pushU14(payload, s.vol < 0 ? 0 : s.vol)
     pushU14(payload, s.pan < 0 ? 8192 : s.pan)
     pushFlagString(payload, true, s.name)
@@ -514,7 +515,7 @@ function sendSlotInfo(activeDevice, slotIndex) {
 function sendTransportInfo(activeDevice) {
     var flags = (gTransport.play ? 1 : 0) | (gTransport.rec ? 2 : 0) |
         (gTransport.cycle ? 4 : 0) | (gTransport.metro ? 8 : 0)
-    var payload = [SX.TRANSPORT, flags]
+    var payload = [flags]
     pushU14(payload, gTransport.bpm < 0 ? 0 : gTransport.bpm)
     pushFlagString(payload, true, gTransport.locator)
     pushFlagString(payload, true, gTransport.locatorFmt)
@@ -522,13 +523,13 @@ function sendTransportInfo(activeDevice) {
 }
 
 function sendQCInfo(activeDevice, idx) {
-    var payload = [SX.QC, idx]
+    var payload = [idx]
     pushU14(payload, gQC[idx] < 0 ? 0 : gQC[idx])
     outSysex(activeDevice, SX.QC, payload)
 }
 
 function sendPluginInfo(activeDevice) {
-    var payload = [SX.PLUGIN, gPlugin.role]
+    var payload = [gPlugin.role]
     pushString(payload, gPlugin.name, STR_MAX_UNITS)
     pushString(payload, gPlugin.vendor, STR_MAX_UNITS)
     pushString(payload, gPlugin.version, STR_MAX_UNITS)
@@ -586,7 +587,7 @@ function daWalk(activeDevice, limit) {
         try { title = da.getObjectTitle(am, node.id) } catch (e) { }
         try { typeName = da.getObjectTypeName(am, node.id) } catch (e) { }
 
-        var payload = [SX.DA_OBJ, walkId]
+        var payload = [walkId]
         pushU14(payload, seq)
         pushU14(payload, node.parent)
         pushFlagString(payload, true, typeName)
@@ -618,7 +619,7 @@ function daWalk(activeDevice, limit) {
             try { pDisplay = da.getParameterDisplayValue(am, node.id, tag) } catch (e) { }
             try { pValue = da.getParameterProcessValue(am, node.id, tag) } catch (e) { }
 
-            var pPayload = [SX.DA_PARAM, walkId]
+            var pPayload = [walkId]
             pushU14(pPayload, seq)
             pushU21(pPayload, tag)
             pushU14(pPayload, Math.round(pValue * 16383))
@@ -674,7 +675,9 @@ midiInput.mOnSysex = function (activeDevice, message) {
 
     switch (cmd) {
         case SX.PING: {
-            sendIdent(activeDevice)
+            // answer with a full snapshot (starts with IDENT) so a freshly
+            // connected MCP server gets complete state immediately
+            sendSnapshot(activeDevice)
             break
         }
         case SX.SNAPSHOT: {
@@ -688,6 +691,11 @@ midiInput.mOnSysex = function (activeDevice, message) {
                 if (s !== slot && gSlots[s].selected) toggleTo(activeDevice, strips[s].btnSelect, false)
             }
             toggleTo(activeDevice, strips[slot].btnSelect, true)
+            break
+        }
+        case SX.DESELECT_SLOT: {
+            var dslot = data[0]
+            if (dslot < NUM_CHANNELS) toggleTo(activeDevice, strips[dslot].btnSelect, false)
             break
         }
         case SX.KC_SLOT: {

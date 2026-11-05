@@ -90,7 +90,14 @@ def main() -> int:
     check("da_get_param Dry/Wet", abs(got["value"] - 0.35) < 0.01, f"{got['value']:.3f}")
     bridge.da_set_param(2, 31, 0.5)
     got = bridge.da_get_param(2, 31)
-    check("da_set_param applies (fake mirrors)", got["value"] is not None)
+    check("da_set_param applies (fake mirrors)", got["value"] is not None and abs(got["value"] - 0.5) < 0.01,
+          f"{got['value']}")
+
+    # -- deselect -------------------------------------------------------------
+    sel = bridge.state()["slots"][r["slot"]]
+    bridge.select_slot(r["slot"], on=False)
+    check("deselect slot", bridge.state()["slots"][r["slot"]]["selected"] is False,
+          sel["name"])
 
     # -- plugin identity ------------------------------------------------------
     ident = bridge.state()["plugin"]

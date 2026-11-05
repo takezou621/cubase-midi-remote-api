@@ -93,8 +93,10 @@ class MidiBridge:
         self._da_params: List[dict] = []
         self._da_done = threading.Event()
         self._da_param_changes: deque = deque(maxlen=100)
+        self._da_pc_counter = 0  # monotonic index; deque alone cannot address past events
         self._fake: Optional["_FakeCubase"] = None
         self._started = False
+        self._degraded_reason: Optional[str] = None
 
         ident_default = {"ident": None}
         transport_default = {
@@ -167,6 +169,17 @@ class MidiBridge:
         self._fake = _FakeCubase(self._on_mido_message)
         log.info("dummy backend: no real MIDI ports are used")
 
+    def mark_degraded(self, reason: str) -> None:
+        """Record why the MIDI ports are unavailable (degraded start)."""
+        self._degraded_reason = reason
+
+    def _require_ready(self) -> None:
+        if self._degraded_reason:
+            raise BridgeError(
+                f"{self._degraded_reason} "
+                "(enable the virtual MIDI port, then restart the server)"
+            )
+
     # ----------------------------------------------------------------- input
     def _on_mido_message(self, msg: mido.Message) -> None:
         try:
@@ -214,8 +227,10 @@ class MidiBridge:
                 k: v for k, v in event.items() if k != "type"
             }
         elif etype == "da_param_change":
+            self._da_pc_counter += 1
             self._da_param_changes.append(
-                {"seq": event["seq"], "tag": event["tag"], "value": event["value"]}
+                {"seq": event["seq"], "tag": event["tag"], "value": event["value"],
+                 "_n": self._da_pc_counter}
             )
         elif etype == "da_obj":
             if self._da_walk_id is None or event["walk_id"] != self._da_walk_id:
@@ -269,6 +284,7 @@ class MidiBridge:
 
     # ------------------------------------------------------------ inspection
     def state(self) -> dict:
+        self._require_ready()
         with self._lock:
             snap = {
                 "backend": self.backend,
@@ -313,8 +329,8 @@ class MidiBridge:
             raise BridgeError(f"param must be one of {sorted(TOGGLE_SYSEX)}")
         self._send_sysex_data(P.cmd_set_toggle(cmd, slot, on))
 
-    def select_slot(self, slot: int) -> None:
-        self._send_sysex_data(P.cmd_select_slot(slot))
+    def select_slot(self, slot: int, on: bool = True) -> None:
+        self._send_sysex_data(P.cmd_select_slot(slot, on))
         time.sleep(0.1)
 
     def quick_control(self, index: int, value01: float) -> None:
@@ -429,15 +445,14 @@ class MidiBridge:
 
     def da_get_param(self, seq: int, tag: int, timeout: float = 1.0) -> dict:
         with self._cond:
-            before = len(self._da_param_changes)
+            marker = self._da_pc_counter  # events appended later have _n > marker
         self._send_sysex_data(P.cmd_da_get(seq, tag))
         deadline = time.time() + timeout
         while time.time() < deadline:
             with self._cond:
-                changes = list(self._da_param_changes)[before:]
-                for ch in changes:
-                    if ch["seq"] == seq and ch["tag"] == tag:
-                        return ch
+                for ch in reversed(self._da_param_changes):
+                    if ch["_n"] > marker and ch["seq"] == seq and ch["tag"] == tag:
+                        return {k: v for k, v in ch.items() if k != "_n"}
             time.sleep(0.02)
         return {"seq": seq, "tag": tag, "value": None, "timeout": True}
 
@@ -621,6 +636,13 @@ class _FakeCubase:
             self._refresh_window()
             for i in range(NUM_SLOTS):
                 self._slot(i)
+        elif cmd == P.SX.DESELECT_SLOT:
+            slot = body[0]
+            if self.bank_start + slot == self.selected:
+                self.selected = -1
+            self._refresh_window()
+            for i in range(NUM_SLOTS):
+                self._slot(i)
         elif cmd == P.SX.SET_VOLUME:
             slot = body[0]
             self.slots[slot]["volume"] = P.join_u14(body[1], body[2]) / 16383.0
@@ -688,18 +710,36 @@ class _FakeCubase:
                 [P.SYSEX_VENDOR_ID, P.SX.DA_DONE, walk_id]
                 + list(P.split_u14(count))
             )
-        elif cmd == P.SX.DA_GET:
+        elif cmd == P.SX.DA_SET:
             seq = P.join_u14(body[0], body[1])
             tag = P.join_u21(body[2], body[3], body[4])
-            value = 0.5
-            for obj in self.DA_TREE:
-                if obj["seq"] == seq:
-                    for param in obj["params"]:
-                        if param["tag"] == tag:
-                            value = param["value"]
+            value = P.join_u14(body[5], body[6]) / 16383.0
+            param = self._find_da_param(seq, tag)
+            if param is not None:
+                param["value"] = value
+            # mirror what the real script's mOnParameterChange would push
             self._emit(
                 [P.SYSEX_VENDOR_ID, P.SX.DA_PARAM_CHANGE]
                 + list(P.split_u14(seq))
                 + list(P.split_u21(tag))
                 + list(P.split_u14(round(value * 16383)))
             )
+        elif cmd == P.SX.DA_GET:
+            seq = P.join_u14(body[0], body[1])
+            tag = P.join_u21(body[2], body[3], body[4])
+            param = self._find_da_param(seq, tag)
+            value = param["value"] if param is not None else 0.5
+            self._emit(
+                [P.SYSEX_VENDOR_ID, P.SX.DA_PARAM_CHANGE]
+                + list(P.split_u14(seq))
+                + list(P.split_u21(tag))
+                + list(P.split_u14(round(value * 16383)))
+            )
+
+    def _find_da_param(self, seq: int, tag: int) -> Optional[dict]:
+        for obj in self.DA_TREE:
+            if obj["seq"] == seq:
+                for param in obj["params"]:
+                    if param["tag"] == tag:
+                        return param
+        return None

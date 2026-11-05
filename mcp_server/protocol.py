@@ -21,6 +21,7 @@ class SX:
 
     # MCP -> Cubase
     SELECT_SLOT = 0x01
+    DESELECT_SLOT = 0x13
     KC_SLOT = 0x02
     SET_VOLUME = 0x03
     SET_PAN = 0x04
@@ -205,8 +206,9 @@ def cmd_snapshot() -> List[int]:
     return sysex_data(SX.SNAPSHOT)
 
 
-def cmd_select_slot(slot: int) -> List[int]:
-    return sysex_data(SX.SELECT_SLOT, [slot])
+def cmd_select_slot(slot: int, on: bool = True) -> List[int]:
+    cmd = SX.SELECT_SLOT if on else SX.DESELECT_SLOT
+    return sysex_data(cmd, [slot])
 
 
 def cmd_kc_slot(slot: int) -> List[int]:

@@ -7,12 +7,21 @@ cd "$REPO_DIR"
 
 PYTHON="${PYTHON:-}"
 if [[ -z "$PYTHON" ]]; then
-    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+    # This project requires Python 3.10+ (mcp/pydantic).
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
         if command -v "$candidate" >/dev/null 2>&1; then
-            PYTHON="$candidate"
-            break
+            if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+                PYTHON="$candidate"
+                break
+            fi
         fi
     done
+fi
+
+if [[ -z "$PYTHON" ]]; then
+    echo "Error: no Python 3.10+ interpreter found." >&2
+    echo "Install one (e.g. 'brew install python@3.12') or set PYTHON=/path/to/python and re-run." >&2
+    exit 1
 fi
 
 echo "Using python: $PYTHON ($($PYTHON --version 2>&1))"
