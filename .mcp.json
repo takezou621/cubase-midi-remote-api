@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cubase": {
+      "command": "/Users/kawai/dev/cubase-midi-remote-api/.venv/bin/python",
+      "args": ["-m", "mcp_server"],
+      "env": {}
+    }
+  }
+}
